@@ -102,6 +102,9 @@ val generateUniFFIKotlin = tasks.register<Exec>("generateUniFFIKotlin") {
     )
 }
 
+fun secret(key: String): String = System.getenv(key.uppercase().replace('.', '_'))
+    ?: localProps.getProperty(key)
+            ?: ""
 android {
     namespace = "com.example.android_app"
     compileSdk {
@@ -116,6 +119,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "SUPABASE_URL", "\"${secret("supabase.url")}\"")
+        buildConfigField("String", "SUPABASE_KEY", "\"${secret("supabase.key")}\"")
+        buildConfigField("String", "SUPABASE_DB_PASSWORD", "\"${secret("supabase.db_password")}\"")
+
     }
 
     buildTypes {
@@ -131,6 +139,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     sourceSets {

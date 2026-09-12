@@ -14,3 +14,5 @@
 # NDK directory used to link the Rust core.
 # Fallbacks: ANDROID_NDK_HOME env var -> newest NDK under sdk.dir/ndk/.
 # rust.ndk.dir=C\:\\Users\\you\\AppData\\Local\\Android\\Sdk\\ndk\\30.0.16248370
+# supabase.url=https://yourproject.supabase.co
+# supabase.anonKey=your-anon-key

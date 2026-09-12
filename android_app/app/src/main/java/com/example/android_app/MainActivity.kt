@@ -4,39 +4,39 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.example.android_app.ui.theme.Android_appTheme
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.android_app.ui.theme.Android_appTheme
 
-import com.example.rust_core.getCount
-import com.example.rust_core.increment
+import com.example.rust_core.init
 
+enum class AppScreen {
+    LOBBY,
+    CHAT
+}
+
+data class ChatMessage(val text: String, val isMe: Boolean)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        init(BuildConfig.SUPABASE_DB_PASSWORD, BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_KEY)
         enableEdgeToEdge()
         setContent {
             Android_appTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                    MainNavigationWrapper(modifier = Modifier.padding(innerPadding))
                 }
             }
         }
@@ -44,27 +44,197 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    var count by remember { mutableStateOf(getCount()) }
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = "Hello Vyshak $count!",
-            modifier = modifier
-        )
+fun MainNavigationWrapper(modifier: Modifier = Modifier) {
+    var currentScreen by remember { mutableStateOf(AppScreen.LOBBY) }
+    var activeRoomId by remember { mutableStateOf("") }
 
-        Button(onClick = {
-            count = increment()
-        }) {
-            Text("Increment via rust", fontSize = 18.sp)
+    Box(modifier = modifier.fillMaxSize()) {
+        when (currentScreen) {
+            AppScreen.LOBBY -> LobbyScreen(
+                onRoomConnected = { roomId ->
+                    activeRoomId = roomId
+                    currentScreen = AppScreen.CHAT
+                }
+            )
+
+            AppScreen.CHAT -> ChatScreen(
+                roomId = activeRoomId,
+                onLeaveRoom = {
+                    activeRoomId = ""
+                    currentScreen = AppScreen.LOBBY
+                }
+            )
         }
     }
 
 }
 
-//@Preview(showBackground = true)
-//@Composable
-//fun GreetingPreview() {
-//    Android_appTheme {
-//        Greeting("Android")
-//    }
-//}
+@Composable
+fun LobbyScreen(onRoomConnected: (String) -> Unit) {
+    var inputRoomId by remember { mutableStateOf("") }
+    var generatedRoomId by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "P2P WebRTC Chat",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 32.dp)
+        )
+        // CARD 1: Host a Room
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(text = "Host a New Chat", fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        // Generate a clean 4-digit room code
+                        generatedRoomId = (1000..9999).random().toString()
+                        // TODO: Fire off WebRTC setup & create Supabase record here
+                        onRoomConnected(generatedRoomId)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Create Room ID")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // CARD 2: Join a Room
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(text = "Join Existing Chat", fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = inputRoomId,
+                    onValueChange = { inputRoomId = it },
+                    label = { Text("Enter 4-Digit Room ID") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+                        if (inputRoomId.isNotBlank()) {
+                            // TODO: Query Supabase for this room ID and accept the offer
+                            onRoomConnected(inputRoomId)
+                        }
+                    },
+                    enabled = inputRoomId.length >= 4,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Join Room")
+                }
+            }
+        }
+
+    }
+}
+@Composable
+fun ChatScreen(roomId: String, onLeaveRoom: () -> Unit) {
+    var messageText by remember { mutableStateOf("") }
+    // Local list placeholder for rendering messages dynamically
+    val messages = remember { mutableStateListOf<ChatMessage>() }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Active Top Bar Display
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(text = "Connected Room", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(text = "#$roomId", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Button(
+                onClick = onLeaveRoom,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text("Disconnect")
+            }
+        }
+
+        // Chat Bubble Scroll Area
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 16.dp),
+            reverseLayout = false
+        ) {
+            items(messages) { message ->
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = if (message.isMe) Alignment.CenterEnd else Alignment.CenterStart
+                ) {
+                    Surface(
+                        color = if (message.isMe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(
+                            topStart = 12.dp,
+                            topEnd = 12.dp,
+                            bottomStart = if (message.isMe) 12.dp else 0.dp,
+                            bottomEnd = if (message.isMe) 0.dp else 12.dp
+                        ),
+                        modifier = Modifier.widthIn(max = 280.dp)
+                    ) {
+                        Text(
+                            text = message.text,
+                            color = if (message.isMe) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // Message Bottom Keyboard Entry Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = messageText,
+                onValueChange = { messageText = it },
+                placeholder = { Text("Type a message...") },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(24.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    if (messageText.isNotBlank()) {
+                        messages.add(ChatMessage(text = messageText, isMe = true))
+                        // TODO: Pipe the string through your actual WebRTC RTCDataChannel stream here
+                        messageText = ""
+                    }
+                },
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Text("Send")
+            }
+        }
+    }
+}
