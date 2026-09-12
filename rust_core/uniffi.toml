@@ -1,0 +1,4 @@
+[bindings.kotlin]
+package_name = "com.example.rust_core"
+cdylib_name = "rust_core"
+android = true

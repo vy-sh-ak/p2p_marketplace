@@ -1,0 +1,5 @@
+[target.aarch64-linux-android]
+linker = "C:/Users/vyshak/AppData/Local/Android/Sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android35-clang.cmd"
+
+[target.x86_64-linux-android]
+linker = "C:/Users/vyshak/AppData/Local/Android/Sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android35-clang.cmd"
