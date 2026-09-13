@@ -19,7 +19,11 @@ pub struct ChatRoom {
     pub id: i64,
     pub room_id: String,
     pub created_at: String,
+    pub offer: Option<String>,
+    pub answer: Option<String>,
 }
+
+const ROOM_COLUMNS: &str = "id, room_id, created_at::text, offer, answer";
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum DbError {
@@ -43,7 +47,7 @@ pub enum DbError {
 /// (https://<ref>.supabase.co -> db.<ref>.supabase.co) and the db password
 /// is passed to PgConnectOptions directly, so no url-encoding is needed.
 /// Idempotent: calling it again when already connected is a no-op.
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn connect_database() -> Result<(), DbError> {
     if DB_POOL.get().is_some() {
         return Ok(());
@@ -89,36 +93,36 @@ fn query_err(e: sqlx::Error) -> DbError {
     }
 }
 
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn create_room(room_id: String) -> Result<ChatRoom, DbError> {
     let pool = pool()?;
-    sqlx::query_as::<_, ChatRoom>(
-        "INSERT INTO chat (room_id) VALUES ($1) RETURNING id, room_id, created_at::text",
-    )
+    sqlx::query_as::<_, ChatRoom>(&format!(
+        "INSERT INTO chat (room_id) VALUES ($1) RETURNING {ROOM_COLUMNS}"
+    ))
     .bind(room_id)
     .fetch_one(pool)
     .await
     .map_err(query_err)
 }
 
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn list_rooms() -> Result<Vec<ChatRoom>, DbError> {
     let pool = pool()?;
-    let rows = sqlx::query_as::<_, ChatRoom>(
-        "SELECT id, room_id, created_at::text FROM chat ORDER BY id",
-    )
+    let rows = sqlx::query_as::<_, ChatRoom>(&format!(
+        "SELECT {ROOM_COLUMNS} FROM chat ORDER BY id"
+    ))
     .fetch_all(pool)
     .await
     .map_err(query_err)?;
     Ok(rows)
 }
 
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn get_room(room_id: String) -> Result<Option<ChatRoom>, DbError> {
     let pool = pool()?;
-    let row = sqlx::query_as::<_, ChatRoom>(
-        "SELECT id, room_id, created_at::text FROM chat WHERE room_id = $1",
-    )
+    let row = sqlx::query_as::<_, ChatRoom>(&format!(
+        "SELECT {ROOM_COLUMNS} FROM chat WHERE room_id = $1"
+    ))
     .bind(room_id)
     .fetch_optional(pool)
     .await
@@ -126,12 +130,44 @@ pub async fn get_room(room_id: String) -> Result<Option<ChatRoom>, DbError> {
     Ok(row)
 }
 
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn set_room_offer(room_id: String, offer: String) -> Result<ChatRoom, DbError> {
+    let pool = pool()?;
+    sqlx::query_as::<_, ChatRoom>(&format!(
+        "UPDATE chat SET offer = $2 WHERE room_id = $1 RETURNING {ROOM_COLUMNS}"
+    ))
+    .bind(&room_id)
+    .bind(offer)
+    .fetch_optional(pool)
+    .await
+    .map_err(query_err)?
+    .ok_or(DbError::Query {
+        detail: format!("chat row with room_id {room_id} not found"),
+    })
+}
+
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn set_room_answer(room_id: String, answer: String) -> Result<ChatRoom, DbError> {
+    let pool = pool()?;
+    sqlx::query_as::<_, ChatRoom>(&format!(
+        "UPDATE chat SET answer = $2 WHERE room_id = $1 RETURNING {ROOM_COLUMNS}"
+    ))
+    .bind(&room_id)
+    .bind(answer)
+    .fetch_optional(pool)
+    .await
+    .map_err(query_err)?
+    .ok_or(DbError::Query {
+        detail: format!("chat row with room_id {room_id} not found"),
+    })
+}
+
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn update_room(id: i64, room_id: String) -> Result<ChatRoom, DbError> {
     let pool = pool()?;
-    sqlx::query_as::<_, ChatRoom>(
-        "UPDATE chat SET room_id = $1 WHERE id = $2 RETURNING id, room_id, created_at::text",
-    )
+    sqlx::query_as::<_, ChatRoom>(&format!(
+        "UPDATE chat SET room_id = $1 WHERE id = $2 RETURNING {ROOM_COLUMNS}"
+    ))
     .bind(room_id)
     .bind(id)
     .fetch_optional(pool)
@@ -140,7 +176,7 @@ pub async fn update_room(id: i64, room_id: String) -> Result<ChatRoom, DbError> 
     .ok_or(DbError::NotFound { id })
 }
 
-#[uniffi::export]
+#[uniffi::export(async_runtime = "tokio")]
 pub async fn delete_room(id: i64) -> Result<bool, DbError> {
     let pool = pool()?;
     let result = sqlx::query("DELETE FROM chat WHERE id = $1")

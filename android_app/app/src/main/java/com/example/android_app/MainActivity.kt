@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,7 +18,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.android_app.ui.theme.Android_appTheme
+import kotlinx.coroutines.launch
 
 import com.example.rust_core.init
 
@@ -45,12 +48,14 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainNavigationWrapper(modifier: Modifier = Modifier) {
+    val viewModel: ChatViewModel = viewModel()
     var currentScreen by remember { mutableStateOf(AppScreen.LOBBY) }
     var activeRoomId by remember { mutableStateOf("") }
 
     Box(modifier = modifier.fillMaxSize()) {
         when (currentScreen) {
             AppScreen.LOBBY -> LobbyScreen(
+                viewModel = viewModel,
                 onRoomConnected = { roomId ->
                     activeRoomId = roomId
                     currentScreen = AppScreen.CHAT
@@ -58,6 +63,7 @@ fun MainNavigationWrapper(modifier: Modifier = Modifier) {
             )
 
             AppScreen.CHAT -> ChatScreen(
+                viewModel = viewModel,
                 roomId = activeRoomId,
                 onLeaveRoom = {
                     activeRoomId = ""
@@ -70,9 +76,11 @@ fun MainNavigationWrapper(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun LobbyScreen(onRoomConnected: (String) -> Unit) {
+fun LobbyScreen(viewModel: ChatViewModel, onRoomConnected: (String) -> Unit) {
     var inputRoomId by remember { mutableStateOf("") }
-    var generatedRoomId by remember { mutableStateOf("") }
+    var lobbyError by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -95,14 +103,24 @@ fun LobbyScreen(onRoomConnected: (String) -> Unit) {
 
                 Button(
                     onClick = {
-                        // Generate a clean 4-digit room code
-                        generatedRoomId = (1000..9999).random().toString()
-                        // TODO: Fire off WebRTC setup & create Supabase record here
-                        onRoomConnected(generatedRoomId)
+                        if (busy) return@Button
+                        busy = true
+                        lobbyError = null
+                        scope.launch {
+                            try {
+                                val code = viewModel.hostRoom()
+                                onRoomConnected(code)
+                            } catch (e: Exception) {
+                                lobbyError = e.message ?: "Failed to create room"
+                            } finally {
+                                busy = false
+                            }
+                        }
                     },
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Create Room ID")
+                    Text(if (busy) "Creating..." else "Create Room ID")
                 }
             }
         }
@@ -129,26 +147,49 @@ fun LobbyScreen(onRoomConnected: (String) -> Unit) {
 
                 Button(
                     onClick = {
-                        if (inputRoomId.isNotBlank()) {
-                            // TODO: Query Supabase for this room ID and accept the offer
-                            onRoomConnected(inputRoomId)
+                        if (busy) return@Button
+                        busy = true
+                        lobbyError = null
+                        scope.launch {
+                            try {
+                                viewModel.joinRoom(inputRoomId)
+                                onRoomConnected(inputRoomId.trim())
+                            } catch (e: Exception) {
+                                lobbyError = e.message ?: "Failed to join room"
+                            } finally {
+                                busy = false
+                            }
                         }
                     },
-                    enabled = inputRoomId.length >= 4,
+                    enabled = inputRoomId.length >= 4 && !busy,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Join Room")
+                    Text(if (busy) "Joining..." else "Join Room")
+                }
+
+                lobbyError?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp)
                 }
             }
         }
 
     }
 }
+
 @Composable
-fun ChatScreen(roomId: String, onLeaveRoom: () -> Unit) {
+fun ChatScreen(viewModel: ChatViewModel, roomId: String, onLeaveRoom: () -> Unit) {
     var messageText by remember { mutableStateOf("") }
-    // Local list placeholder for rendering messages dynamically
-    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val messages = viewModel.messages
+    val connectionState = viewModel.connectionState
+    val statusMessage = viewModel.statusMessage
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Active Top Bar Display
@@ -165,11 +206,29 @@ fun ChatScreen(roomId: String, onLeaveRoom: () -> Unit) {
                 Text(text = "#$roomId", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
             }
             Button(
-                onClick = onLeaveRoom,
+                onClick = {
+                    viewModel.disconnect()
+                    onLeaveRoom()
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
             ) {
                 Text("Disconnect")
             }
+        }
+
+        if (connectionState != ConnectionState.CONNECTED) {
+            Text(
+                text = when (connectionState) {
+                    ConnectionState.CONNECTING -> "Connecting..."
+                    ConnectionState.FAILED -> statusMessage ?: "Connection failed"
+                    ConnectionState.DISCONNECTED -> statusMessage ?: "Disconnected"
+                    ConnectionState.CONNECTED -> ""
+                },
+                fontSize = 13.sp,
+                color = if (connectionState == ConnectionState.FAILED) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            )
         }
 
         // Chat Bubble Scroll Area
@@ -178,6 +237,7 @@ fun ChatScreen(roomId: String, onLeaveRoom: () -> Unit) {
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
+            state = listState,
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 16.dp),
             reverseLayout = false
@@ -226,9 +286,9 @@ fun ChatScreen(roomId: String, onLeaveRoom: () -> Unit) {
             Button(
                 onClick = {
                     if (messageText.isNotBlank()) {
-                        messages.add(ChatMessage(text = messageText, isMe = true))
-                        // TODO: Pipe the string through your actual WebRTC RTCDataChannel stream here
-                        messageText = ""
+                        if (viewModel.sendMessage(messageText)) {
+                            messageText = ""
+                        }
                     }
                 },
                 shape = RoundedCornerShape(24.dp)

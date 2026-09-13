@@ -172,4 +172,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation("net.java.dev.jna:jna:5.19.1@aar")
+    implementation(libs.stream.webrtc.android)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
 }
