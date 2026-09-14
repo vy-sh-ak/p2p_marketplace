@@ -42,6 +42,15 @@ fun resolveCargoExecutable(): File {
 
 val rustCargo = resolveCargoExecutable()
 
+val cargoNdkExe = if (System.getProperty("os.name").lowercase().contains("windows")) "cargo-ndk.exe" else "cargo-ndk"
+
+val cargoNdkCandidates: List<File> = buildList {
+    localProps.getProperty("cargo.dir")?.let { dir -> add(File(dir, cargoNdkExe)) }
+    add(File(rustCargo.parentFile, cargoNdkExe))
+    System.getenv("CARGO_HOME")?.let { home -> add(File(home, "bin/$cargoNdkExe")) }
+    System.getenv("PATH")?.split(File.pathSeparator)?.forEach { dir -> add(File(dir, cargoNdkExe)) }
+}
+
 val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffi/kotlin")
 val generatedJniDir = layout.buildDirectory.dir("generated/jniLibs")
 
@@ -59,6 +68,16 @@ val rustProfileDir = if (rustBuildProfile == "release") "release" else "debug"
 val rustBuildArgs = if (rustBuildProfile == "release") listOf("--release") else emptyList<String>()
 
 val buildRustAndroid = tasks.register<Exec>("buildRustAndroid") {
+    val cargoNdkPaths = cargoNdkCandidates
+    doFirst {
+        if (cargoNdkPaths.none { it.exists() }) {
+            throw GradleException(
+                "cargo-ndk is not installed.\n\n" +
+                    "Run:  cargo install cargo-ndk\n\n" +
+                    "See https://crates.io/crates/cargo-ndk for details."
+            )
+        }
+    }
     workingDir(rustDir)
     environment(rustEnvironment())
     commandLine(

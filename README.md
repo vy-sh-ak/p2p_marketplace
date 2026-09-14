@@ -35,7 +35,14 @@ p2p_marketplace/
   rustup target add aarch64-linux-android x86_64-linux-android
   ```
 
-- **cargo-ndk**: `cargo install cargo-ndk` — the Gradle build uses it to link the Rust core for Android, so no manual NDK linker configuration is needed
+> **⚠️ `cargo-ndk` is required.** The Gradle build uses it to cross-compile the Rust core for Android. Install it before your first build:
+>
+> ```sh
+> cargo install cargo-ndk
+> ```
+>
+> If you forget, the build will fail with a clear message pointing to this step.
+
 - **Local configuration**: copy `android_app/local.properties.example` to `android_app/local.properties` and adjust the paths for your machine (this file is machine-specific and intentionally not committed)
 
 ## Configuration & Environment Variables
