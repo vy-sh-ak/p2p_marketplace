@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Exec
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -7,39 +8,91 @@ plugins {
 
 val rustDir = rootProject.projectDir.parentFile.resolve("rust_core")
 
-val rustCargo = System.getenv("USERPROFILE")?.let { file("$it/.cargo/bin/cargo.exe") }?: error("USERPROFILE environment not available")
+val localProps = Properties().apply {
+    rootProject.file("local.properties")
+        .takeIf { it.exists() }
+        ?.inputStream()
+        ?.use { load(it) }
+}
+
+val cargoExe = if (System.getProperty("os.name").lowercase().contains("windows")) "cargo.exe" else "cargo"
+
+fun resolveCargoExecutable(): File {
+    localProps.getProperty("cargo.dir")?.let { dir ->
+        val candidate = file("$dir/$cargoExe")
+        if (candidate.exists()) return candidate
+    }
+    System.getenv("CARGO_HOME")?.let { home ->
+        val candidate = file("$home/bin/$cargoExe")
+        if (candidate.exists()) return candidate
+    }
+    (System.getenv("USERPROFILE") ?: System.getenv("HOME"))?.let { home ->
+        val candidate = file("$home/.cargo/bin/$cargoExe")
+        if (candidate.exists()) return candidate
+    }
+    System.getenv("PATH")?.split(File.pathSeparator)?.forEach { dir ->
+        val candidate = file("$dir/$cargoExe")
+        if (candidate.exists()) return candidate
+    }
+    error(
+        "cargo executable not found. Set 'cargo.dir' in android_app/local.properties " +
+            "(see local.properties.example) or install Rust via https://rustup.rs"
+    )
+}
+
+val rustCargo = resolveCargoExecutable()
+
+val cargoNdkExe = if (System.getProperty("os.name").lowercase().contains("windows")) "cargo-ndk.exe" else "cargo-ndk"
+
+val cargoNdkCandidates: List<File> = buildList {
+    localProps.getProperty("cargo.dir")?.let { dir -> add(File(dir, cargoNdkExe)) }
+    add(File(rustCargo.parentFile, cargoNdkExe))
+    System.getenv("CARGO_HOME")?.let { home -> add(File(home, "bin/$cargoNdkExe")) }
+    System.getenv("PATH")?.split(File.pathSeparator)?.forEach { dir -> add(File(dir, cargoNdkExe)) }
+}
+
 val generatedKotlinDir = layout.buildDirectory.dir("generated/uniffi/kotlin")
 val generatedJniDir = layout.buildDirectory.dir("generated/jniLibs")
+
+fun rustEnvironment(): Map<String, String> {
+    val env = mutableMapOf<String, String>()
+    if (System.getenv("ANDROID_HOME") == null && System.getenv("ANDROID_SDK_ROOT") == null) {
+        localProps.getProperty("sdk.dir")?.let { env["ANDROID_HOME"] = it }
+    }
+    localProps.getProperty("rust.ndk.dir")?.let { env["ANDROID_NDK_HOME"] = it }
+    return env
+}
 
 val rustBuildProfile = "debug"
 val rustProfileDir = if (rustBuildProfile == "release") "release" else "debug"
 val rustBuildArgs = if (rustBuildProfile == "release") listOf("--release") else emptyList<String>()
 
-val buildRustArm64 = tasks.register<Exec>("buildRustArm64") {
+val buildRustAndroid = tasks.register<Exec>("buildRustAndroid") {
+    val cargoNdkPaths = cargoNdkCandidates
+    doFirst {
+        if (cargoNdkPaths.none { it.exists() }) {
+            throw GradleException(
+                "cargo-ndk is not installed.\n\n" +
+                    "Run:  cargo install cargo-ndk\n\n" +
+                    "See https://crates.io/crates/cargo-ndk for details."
+            )
+        }
+    }
     workingDir(rustDir)
+    environment(rustEnvironment())
     commandLine(
         rustCargo.absolutePath,
+        "ndk",
+        "-t",
+        "arm64-v8a",
+        "-t",
+        "x86_64",
+        "-o",
+        generatedJniDir.get().asFile.absolutePath,
+        "--",
         "build",
-        *rustBuildArgs.toTypedArray(),
-        "--target",
-        "aarch64-linux-android"
+        *rustBuildArgs.toTypedArray()
     )
-}
-val buildRustX86_64 = tasks.register<Exec>("buildRustX86_64") {
-    workingDir(rustDir)
-
-    commandLine(
-        rustCargo.absolutePath,
-        "build",
-        *rustBuildArgs.toTypedArray(),
-        "--target",
-        "x86_64-linux-android"
-    )
-}
-
-val buildRustAndroid = tasks.register("buildRustAndroid") {
-    dependsOn(buildRustArm64)
-    dependsOn(buildRustX86_64)
 }
 
 val cleanGeneratedKotlin = tasks.register<Delete>("cleanGeneratedKotlin") {
@@ -47,7 +100,7 @@ val cleanGeneratedKotlin = tasks.register<Delete>("cleanGeneratedKotlin") {
 }
 
 val generateUniFFIKotlin = tasks.register<Exec>("generateUniFFIKotlin") {
-    dependsOn(buildRustArm64, cleanGeneratedKotlin)
+    dependsOn(buildRustAndroid, cleanGeneratedKotlin)
     workingDir(rustDir)
 
     commandLine(
@@ -68,47 +121,9 @@ val generateUniFFIKotlin = tasks.register<Exec>("generateUniFFIKotlin") {
     )
 }
 
-val copyRustArm64 = tasks.register<Copy>("copyRustArm64") {
-    dependsOn(buildRustArm64)
-
-    from(
-        rustDir.resolve("target/aarch64-linux-android/$rustProfileDir")
-    ) {
-        include("librust_core.so")
-    }
-
-    into(
-        generatedJniDir.map {
-            it.dir("arm64-v8a")
-        }
-    )
-}
-
-val copyRustX86_64 = tasks.register<Copy>("copyRustX86_64") {
-
-    dependsOn(buildRustX86_64)
-
-    from(
-        rustDir.resolve(
-            "target/x86_64-linux-android/$rustProfileDir"
-        )
-    ) {
-        include("librust_core.so")
-    }
-
-    into(
-        generatedJniDir.map {
-            it.dir("x86_64")
-        }
-    )
-}
-
-val copyRustLibraries = tasks.register("copyRustLibraries") {
-    dependsOn(copyRustArm64)
-    dependsOn(copyRustX86_64)
-}
-
-
+fun secret(key: String): String = System.getenv(key.uppercase().replace('.', '_'))
+    ?: localProps.getProperty(key)
+            ?: ""
 android {
     namespace = "com.example.android_app"
     compileSdk {
@@ -123,6 +138,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "SUPABASE_URL", "\"${secret("supabase.url")}\"")
+        buildConfigField("String", "SUPABASE_KEY", "\"${secret("supabase.key")}\"")
+        buildConfigField("String", "SUPABASE_DB_PASSWORD", "\"${secret("supabase.db_password")}\"")
+
     }
 
     buildTypes {
@@ -138,6 +158,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     sourceSets {
@@ -151,7 +172,6 @@ android {
 
 tasks.named("preBuild") {
     dependsOn(generateUniFFIKotlin)
-    dependsOn(copyRustLibraries)
 }
 
 dependencies {
@@ -171,4 +191,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation("net.java.dev.jna:jna:5.19.1@aar")
+    implementation(libs.stream.webrtc.android)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
 }
